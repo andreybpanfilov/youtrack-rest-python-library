@@ -19,7 +19,7 @@ import datetime
 import urllib2
 import jira
 from jira.client import JiraClient
-from youtrack import Issue, YouTrackException, Comment, Link, WorkItem
+from youtrack import YouTrackException, Link, WorkItem
 import youtrack
 from youtrack.connection import Connection
 from youtrack.importHelper import create_bundle_safe
@@ -69,7 +69,8 @@ Options:
          Mapping format is JIRA_FIELD_NAME:YT_FIELD_NAME@FIELD_TYPE
     -M,  Comma-separated list of field value mappings.
          Mapping format is YT_FIELD_NAME:JIRA_FIELD_VALUE=YT_FIELD_VALUE[;...]
-    -T,  Comma-separated list of description fields
+    -D,  Comma-separated list of fields which compose description
+    -S,  Comma-separated list of fields to skip
 """ % os.path.basename(sys.argv[0])
 
 
@@ -89,9 +90,10 @@ def main():
     field_mappings = dict()
     value_mappings = dict()
     description_fields = []
+    skip_fields = []
     batch_size = 10
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'harltiwb:m:M:T:')
+        opts, args = getopt.getopt(sys.argv[1:], 'harltiwb:m:M:D:S:')
         for opt, val in opts:
             if opt == '-h':
                 usage()
@@ -130,8 +132,10 @@ def main():
                         if field_name not in value_mappings:
                             value_mappings[field_name] = dict()
                         value_mappings[field_name][jira_value.lower()] = yt_value
-            elif opt == '-T':
-                description_fields = re.split(",\s*", val)
+            elif opt == '-D':
+                description_fields += [f.lower() for f in re.split(",\s*", val)]
+            elif opt == '-S':
+                skip_fields += [f.lower() for f in re.split(",\s*", val)]
             elif opt == '-b':
                 batch_size = int(val)
 
@@ -170,80 +174,8 @@ def main():
 
     jira2youtrack(j_url, j_login, j_password,
                   y_url, y_login, y_password, projects,
-                  flags, batch_size, field_mappings, value_mappings, description_fields)
-
-
-def to_yt_issue(target, issue, project_id,
-                fields_mapping=None, value_mappings=None, description_fields=None):
-    yt_issue = Issue()
-    yt_issue['comments'] = []
-    yt_issue.numberInProject = issue['key'][(issue['key'].find('-') + 1):]
-    description = ""
-    for field in description_fields:
-        label = issue['names'].get(field, None)
-        if not label:
-            label = field
-        value = issue['fields'].get(field, None)
-        if value:
-            if isinstance(value, dict):
-                value = value['value']
-            if isinstance(value, basestring):
-                description += "'''%s''':\r\n" % label
-                description += value + "\r\n"
-    yt_issue['description'] = description + (issue['fields'].get('description', None) or '')
-    for field, value in issue['fields'].items():
-        if field == 'description':
-            continue
-        if field in description_fields:
-            continue
-        if value is None:
-            continue
-        if fields_mapping and field.lower() in fields_mapping:
-            field_name, field_type = fields_mapping[field.lower()]
-        else:
-            field_name = get_yt_field_name(field)
-            field_type = get_yt_field_type(field_name)
-        if field_name == 'comment':
-            for comment in value['comments']:
-                yt_comment = Comment()
-                yt_comment.text = comment['body']
-                comment_author_name = "guest"
-                if 'author' in comment:
-                    comment_author = comment['author']
-                    create_user(target, comment_author)
-                    comment_author_name = comment_author['name']
-                yt_comment.author = comment_author_name.replace(' ', '_')
-                yt_comment.created = to_unix_date(comment['created'])
-                yt_comment.updated = to_unix_date(comment['updated'])
-                yt_issue['comments'].append(yt_comment)
-        elif (field_name is not None) and (field_type is not None):
-            if isinstance(value, list) and len(value):
-                yt_issue[field_name] = []
-                for v in value:
-                    if isinstance(v, dict):
-                        v['name'] = get_yt_field_value(field_name, v['name'], value_mappings)
-                    else:
-                        v = get_yt_field_value(field_name, v, value_mappings)
-                    create_value(target, v, field_name, field_type, project_id)
-                    yt_issue[field_name].append(get_value_presentation(field_type, v))
-            else:
-                if field_name.lower() == 'estimation':
-                    if field_type == 'period':
-                        value = int(int(value) / 60)
-                    elif field_type == 'integer':
-                        value = int(int(value) / 3600)
-                if isinstance(value, int):
-                    value = str(value)
-                if len(value):
-                    if isinstance(value, dict):
-                        value['name'] = get_yt_field_value(field_name, value['name'], value_mappings)
-                    else:
-                        value = get_yt_field_value(field_name, value, value_mappings)
-                    create_value(target, value, field_name, field_type, project_id)
-                    yt_issue[field_name] = get_value_presentation(field_type, value)
-        elif _debug:
-            print 'DEBUG: unclassified field', field_name
-    return yt_issue
+                  flags, batch_size, field_mappings, value_mappings,
+                  description_fields, skip_fields)
 
 
 def ignore_youtrack_exceptions(f):
@@ -270,29 +202,27 @@ def process_labels(target, issue):
 
 
 def get_yt_field_name(jira_name):
-    if jira_name in jira.FIELD_NAMES:
-        return jira.FIELD_NAMES[jira_name]
-    return jira_name
+    # case sensitive
+    return jira.FIELD_NAMES.get(jira_name, jira_name)
 
 
 def get_yt_field_type(yt_name):
-    result = jira.FIELD_TYPES.get(yt_name)
-    if result is None:
-        result = youtrack.EXISTING_FIELD_TYPES.get(yt_name)
-    return result
+    # case sensitive
+    return jira.FIELD_TYPES.get(yt_name, youtrack.EXISTING_FIELD_TYPES.get(yt_name))
 
 
 def get_yt_field_value(field_name, jira_value, value_mappings):
-    new_value = jira_value
     if isinstance(field_name, unicode):
         field_name = field_name.encode('utf-8')
     if isinstance(jira_value, unicode):
         jira_value = jira_value.encode('utf-8')
-    try:
-        new_value = value_mappings[field_name.lower()][jira_value.lower()]
-    except KeyError:
-        pass
-    return new_value
+    # we may have custom priority mapping
+    if field_name.lower() in value_mappings:
+        return value_mappings[field_name.lower()].get(jira_value.lower(), jira_value)
+    # default priority mapping
+    elif field_name.lower() == 'priority':
+        return jira.PRIORITIES.get(jira_value.lower(), jira_value)
+    return jira_value
 
 
 def process_links(target, issue, yt_links):
@@ -335,51 +265,12 @@ def process_links(target, issue, yt_links):
 
 def create_user(target, value):
     try:
-        target.createUserDetailed(value['name'].replace(' ', '_'), value['displayName'], value[u'name'], 'fake_jabber')
+        name = value['name'].replace(' ', '_')
+        target.createUserDetailed(name, value['displayName'], value[u'name'], 'fake_jabber')
     except YouTrackException, e:
         print(str(e))
     except KeyError, e:
         print(str(e))
-
-
-def create_value(target, value, field_name, field_type, project_id):
-    if field_type.startswith('user'):
-        create_user(target, value)
-        value['name'] = value['name'].replace(' ', '_')
-    if field_name in jira.EXISTING_FIELDS:
-        return
-    if field_name.lower() not in [field.name.lower() for field in target.getProjectCustomFields(project_id)]:
-        if field_name.lower() not in [field.name.lower() for field in target.getCustomFields()]:
-            target.createCustomFieldDetailed(field_name, field_type, False, True, False, {})
-        if field_type in ['string', 'date', 'integer', 'period']:
-            try:
-                target.createProjectCustomFieldDetailed(
-                    project_id, field_name, "No " + field_name)
-            except YouTrackException, e:
-                if e.response.status == 409:
-                    print e
-                else:
-                    raise e
-        else:
-            bundle_name = "%s: %s" % (project_id, field_name)
-            create_bundle_safe(target, bundle_name, field_type)
-            try:
-                target.createProjectCustomFieldDetailed(
-                    project_id, field_name, "No " + field_name,
-                    {'bundle': bundle_name})
-            except YouTrackException, e:
-                if e.response.status == 409:
-                    print e
-                else:
-                    raise e
-    if field_type in ['string', 'date', 'integer', 'period']:
-        return
-    project_field = target.getProjectCustomField(project_id, field_name)
-    bundle = target.getBundle(field_type, project_field.bundle)
-    try:
-        target.addValueToBundle(bundle, re.sub(r'[<>/]', '_', get_value_presentation(field_type, value)))
-    except YouTrackException:
-        pass
 
 
 def to_unix_date(time_string, truncate=False):
@@ -403,7 +294,13 @@ def to_unix_date(time_string, truncate=False):
     return str(epoch * 1000)
 
 
-def get_value_presentation(field_type, value):
+def get_value_presentation(field_name, field_type, value):
+    if field_name.lower() == 'estimation':
+        if field_type == 'period':
+            value = int(int(value) / 60)
+        elif field_type == 'integer':
+            value = int(int(value) / 3600)
+        return str(value)
     if field_type == 'date':
         return to_unix_date(value)
     if field_type == 'integer' or field_type == 'period':
@@ -417,7 +314,7 @@ def get_value_presentation(field_type, value):
 
 
 @ignore_youtrack_exceptions
-def process_attachments(source, target, issue, replace=False):
+def process_attachments(source, target, issue, replace):
     def get_attachment_hash(attach):
         return attach.name + '\n' + attach.created
 
@@ -479,23 +376,26 @@ def process_worklog(source, target, issue):
 
 def jira2youtrack(source_url, source_login, source_password,
                   target_url, target_login, target_password,
-                  projects, flags, batch_size, field_mappings, value_mappings, description_fields):
+                  projects, flags, batch_size, field_mappings,
+                  value_mappings, description_fields, skip_fields):
     print 'source_url   : ' + source_url
     print 'source_login : ' + source_login
     print 'target_url   : ' + target_url
     print 'target_login : ' + target_login
 
     source = JiraClient(source_url, source_login, source_password)
-    target = Connection(target_url, target_login, target_password)
+    target = Target(target_url, target_login, target_password)
 
     issue_links = []
 
-    for project in projects:
-        project_id, start, end = project
+    for (project_id, start, end) in projects:
         try:
             target.createProjectDetailed(project_id, project_id, '', target_login)
         except YouTrackException:
             pass
+
+        project = ProjectHelper(target, project_id, field_mappings,
+                                value_mappings, description_fields, skip_fields)
 
         while True:
             _end = start + batch_size - 1
@@ -515,13 +415,10 @@ def jira2youtrack(source_url, source_login, source_password,
                 if flags & FI_ISSUES:
                     issues2import = []
                     for issue in jira_issues:
-                        issues2import.append(
-                            to_yt_issue(target, issue, project_id,
-                                        field_mappings, value_mappings, description_fields))
+                        issues2import.append(project.build_issue(issue))
                     if not issues2import:
                         continue
-                    target.importIssues(
-                        project_id, '%s assignees' % project_id, issues2import)
+                    target.importIssues(project_id, '%s assignees' % project_id, issues2import)
             except YouTrackException, e:
                 print e
                 continue
@@ -531,8 +428,7 @@ def jira2youtrack(source_url, source_login, source_password,
                 if flags & FI_LABELS:
                     process_labels(target, issue)
                 if flags & FI_ATTACHMENTS:
-                    process_attachments(source, target, issue,
-                                        flags & FI_REPLACE_ATTACHMENTS > 0)
+                    process_attachments(source, target, issue, flags & FI_REPLACE_ATTACHMENTS > 0)
                 if flags & FI_WORK_LOG:
                     process_worklog(source, target, issue)
 
@@ -554,6 +450,209 @@ class JiraAttachment(object):
     def getContent(self):
         return urllib2.urlopen(
             urllib2.Request(self._url, headers=self._source._headers))
+
+
+class Target(Connection):
+    def __init__(self, url, login=None, password=None, proxy_info=None, api_key=None):
+        super(Target, self).__init__(url, login, password, proxy_info, api_key)
+        self.users = []
+
+    def createUser(self, user):
+        login = user['login']
+        if login in self.users:
+            return
+        super(Target, self).createUser(user)
+        self.users.append(login)
+
+    def createUserDetailed(self, login, fullName, email, jabber):
+        self.createUser({
+            'login': login,
+            'fullName': fullName,
+            'email': email,
+            'jabber': jabber
+        })
+
+
+class ProjectHelper(object):
+    def __init__(self, connection, id, fields_mapping, value_mappings, description_fields, skip_fields):
+        super(ProjectHelper, self).__init__()
+        self.id = id
+        self.target = connection
+        self.fields_mapping = fields_mapping
+        self.value_mappings = value_mappings
+        self.description_fields = description_fields
+        self.skip_fields = skip_fields
+        self.bundles = dict()
+        self.known_fields = []
+
+    def create_bundle(self, field_name, field_type, value):
+        if field_name in self.bundles and value in self.bundles[field_name]:
+            return
+        project_field = self.target.getProjectCustomField(self.id, field_name)
+        bundle = self.target.getBundle(field_type, project_field.bundle)
+        self.target.addValueToBundle(bundle, value)
+        if field_name not in self.bundles:
+            self.bundles[field_name] = []
+        self.bundles[field_name].append(value)
+
+    def get_pcf(self):
+        return [f.name.lower() for f in self.target.getProjectCustomFields(self.id)]
+
+    def get_cf(self):
+        return [f.name.lower() for f in self.target.getCustomFields()]
+
+    def create_cf(self, field_name, type_name, is_private=False,
+                  default_visibility=True, auto_attached=False,
+                  additional_params=dict([])):
+        return self.target.createCustomFieldDetailed(
+            field_name, type_name, is_private, default_visibility,
+            auto_attached, additional_params)
+
+    def create_pcf(self, field_name, empty_field_text, params=None):
+        return self.target.createProjectCustomFieldDetailed(self.id, field_name, empty_field_text, params)
+
+    def describe_field(self, field):
+        if field.lower() == 'description':
+            return None, None
+        if field.lower() in self.description_fields:
+            return None, None
+        if field.lower() in self.skip_fields:
+            return None, None
+        if self.fields_mapping and field.lower() in self.fields_mapping:
+            field_name, field_type = self.fields_mapping[field.lower()]
+        else:
+            field_name = get_yt_field_name(field)
+            field_type = get_yt_field_type(field_name)
+        return field_name, field_type
+
+    def build_description(self, issue):
+        description = ""
+        for field in self.description_fields:
+            label = issue['names'].get(field, None)
+            if not label:
+                label = field
+            value = issue['fields'].get(field, None)
+            if value:
+                if isinstance(value, dict):
+                    value = value['value']
+                if isinstance(value, basestring):
+                    description += "'''%s''':\r\n" % label
+                    description += value + "\r\n"
+        return description + (issue['fields'].get('description', None) or '')
+
+    def build_value(self, field_name, field_type, value):
+        if isinstance(value, dict):
+            value['name'] = get_yt_field_value(field_name, value['name'], self.value_mappings)
+        else:
+            value = get_yt_field_value(field_name, value, self.value_mappings)
+        return self.create_value(field_name, field_type, value)
+
+    def build_comment(self, comment):
+        yt_comment = youtrack.Comment()
+        yt_comment.text = comment['body']
+        comment_author_name = "guest"
+        if 'author' in comment:
+            comment_author = comment['author']
+            create_user(self.target, comment_author)
+            comment_author_name = comment_author['name']
+        yt_comment.author = comment_author_name.replace(' ', '_')
+        yt_comment.created = to_unix_date(comment['created'])
+        yt_comment.updated = to_unix_date(comment['updated'])
+        return yt_comment
+
+    def build_issue(self, issue):
+        self.create_fields(issue['fields'].keys())
+        yt_issue = youtrack.Issue()
+        yt_issue.numberInProject = issue['key'][(issue['key'].find('-') + 1):]
+        yt_issue['comments'] = []
+        yt_issue['description'] = self.build_description(issue)
+        for field, value in issue['fields'].items():
+            if value is None:
+                continue
+            field_name, field_type = self.describe_field(field)
+            if field_name is None:
+                continue
+            if field_name == 'comment':
+                for comment in value['comments']:
+                    yt_issue['comments'].append(self.build_comment(comment))
+            if field_type is None:
+                if _debug:
+                    print 'DEBUG: unclassified field', field
+                continue
+
+            is_list = isinstance(value, list)
+            values = []
+            for v in (value if is_list else [value]):
+                values.append(self.build_value(field_name, field_type, v))
+            if len(values):
+                if is_list:
+                    yt_issue[field_name] = values
+                else:
+                    yt_issue[field_name] = values[0]
+        return yt_issue
+
+    def create_fields(self, fields):
+        project_fields = None
+        custom_fields = None
+        for field in fields:
+            # optimization
+            if field.lower() in self.known_fields:
+                continue
+            self.known_fields.append(field.lower())
+
+            field_name, field_type = self.describe_field(field)
+            if field_type is None or field_name is None:
+                continue
+
+            # case sensitive
+            if field_name in jira.EXISTING_FIELDS:
+                continue
+
+            if project_fields is None:
+                project_fields = self.get_pcf()
+            if custom_fields is None:
+                custom_fields = self.get_cf()
+
+            if field_name.lower() in project_fields:
+                continue
+
+            if field_name.lower() not in custom_fields:
+                self.create_cf(field_name, field_type)
+
+            if field_type in ['string', 'date', 'integer', 'period']:
+                try:
+                    self.create_pcf(field_name, "No " + field_name)
+                except YouTrackException, e:
+                    if e.response.status == 409:
+                        print e
+                    else:
+                        raise e
+            else:
+                bundle_name = "%s: %s" % (self.id, field_name)
+                create_bundle_safe(self.target, bundle_name, field_type)
+                try:
+                    self.create_pcf(field_name, "No " + field_name, {'bundle': bundle_name})
+                except YouTrackException, e:
+                    if e.response.status == 409:
+                        print e
+                    else:
+                        raise e
+
+    def create_value(self, field_name, field_type, value):
+        if field_type.startswith('user'):
+            create_user(self.target, value)
+            value['name'] = value['name'].replace(' ', '_')
+        value = get_value_presentation(field_name, field_type, value)
+        if field_name in jira.EXISTING_FIELDS:
+            return value
+        if field_type in ['string', 'date', 'integer', 'period']:
+            return value
+        value = re.sub(r'[<>/]', '_', value)
+        try:
+            self.create_bundle(field_name, field_type, value)
+        except YouTrackException:
+            pass
+        return value
 
 
 if __name__ == '__main__':

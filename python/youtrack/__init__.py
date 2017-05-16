@@ -454,21 +454,21 @@ class UserBundle(YouTrackObject):
         self.name = xml.getAttribute("name")
         users = xml.getElementsByTagName("user")
         if users is not None:
-            self.users = [self.youtrack.getUser(v.getAttribute("login")) for v in users]
+            self.users = [v.getAttribute("login") for v in users]
         else:
             self.users = []
         groups = xml.getElementsByTagName("userGroup")
         if groups is not None:
-            self.groups = [self.youtrack.getGroup(v.getAttribute("name")) for v in groups]
+            self.groups = [v.getAttribute("name") for v in groups]
         else:
             self.groups = []
 
     def toXml(self):
         result = '<userBundle name="%s">' % self.name.encode('utf-8')
         result += "".join(
-            '<userGroup name="%s" url="dirty_hack"></userGroup>' % group.name.encode('utf-8') for group in self.groups)
+            '<userGroup name="%s" url="dirty_hack"></userGroup>' % group.encode('utf-8') for group in self.groups)
         result += "".join(
-            '<user login="%s" url="yet_another_dirty_hack"></user>' % user.login.encode('utf-8') for user in self.users)
+            '<user login="%s" url="yet_another_dirty_hack"></user>' % user.encode('utf-8') for user in self.users)
         result += '</userBundle>'
         return result
 
@@ -479,11 +479,11 @@ class UserBundle(YouTrackObject):
         all_users = self.users
         for group in self.groups:
             #returns objects containing only login and url info
-            group_users = self.youtrack.getUsers({'group': group.name.encode('utf-8')})
+            group_users = self.youtrack.getUsers({'group': group.encode('utf-8')})
             for user in group_users:
                 # re-request credentials separately for each user to get more details
                 try:
-                    refined_user = self.youtrack.getUser(user.login)
+                    refined_user = self.youtrack.getUser(user)
                     all_users.append(refined_user)
                 except YouTrackException, e:
                     print "Error on extracting user info for [" + str(user.login) + "] user won't be imported"
