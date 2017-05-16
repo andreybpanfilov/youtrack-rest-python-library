@@ -1,14 +1,14 @@
-import os
 import base64
 import json
+
 import httplib2
+import os
 from jira import JiraException
 
 _debug = os.environ.get('DEBUG')
 
 
 class JiraClient(object):
-
     def __init__(self, url, login, password):
         self._url = (url[:-1] if (url[-1] == '/') else url) + "/rest"
         self._headers = {}
@@ -33,7 +33,7 @@ class JiraClient(object):
         return issues
 
     def get_issue(self, issue_id):
-        response, content = self._get(self._rest_url() + "/issue/" + issue_id)
+        response, content = self._get(self._rest_url() + ("/issue/%s?expand=names" % issue_id))
         if response.status == 200:
             return content
         print "Can't get issue " + issue_id

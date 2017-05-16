@@ -8,8 +8,8 @@
 
 import calendar
 import functools
-import os
 import sys
+import os
 import re
 import getopt
 import datetime
@@ -20,7 +20,6 @@ from youtrack import Issue, YouTrackException, Comment, Link, WorkItem
 import youtrack
 from youtrack.connection import Connection
 from youtrack.importHelper import create_bundle_safe
-
 
 jt_fields = []
 
@@ -66,7 +65,9 @@ Options:
          Mapping format is JIRA_FIELD_NAME:YT_FIELD_NAME@FIELD_TYPE
     -M,  Comma-separated list of field value mappings.
          Mapping format is YT_FIELD_NAME:JIRA_FIELD_VALUE=YT_FIELD_VALUE[;...]
+    -T,  Comma-separated list of description fields
 """ % os.path.basename(sys.argv[0])
+
 
 # Primary import options
 FI_ISSUES = 0x01
@@ -83,8 +84,9 @@ def main():
     flags = 0
     field_mappings = dict()
     value_mappings = dict()
+    description_fields = []
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'harltiwm:M:')
+        opts, args = getopt.getopt(sys.argv[1:], 'harltiwm:M:T:')
         for opt, val in opts:
             if opt == '-h':
                 usage()
@@ -123,6 +125,8 @@ def main():
                         if field_name not in value_mappings:
                             value_mappings[field_name] = dict()
                         value_mappings[field_name][jira_value.lower()] = yt_value
+            elif opt == '-T':
+                description_fields = re.split(",\s*", val)
     except getopt.GetoptError, e:
         print e
         usage()
@@ -158,15 +162,32 @@ def main():
 
     jira2youtrack(j_url, j_login, j_password,
                   y_url, y_login, y_password, projects,
-                  flags, field_mappings, value_mappings)
+                  flags, field_mappings, value_mappings, description_fields)
 
 
 def to_yt_issue(target, issue, project_id,
-                fields_mapping=None, value_mappings=None):
+                fields_mapping=None, value_mappings=None, description_fields=None):
     yt_issue = Issue()
     yt_issue['comments'] = []
     yt_issue.numberInProject = issue['key'][(issue['key'].find('-') + 1):]
+    description = ""
+    for field in description_fields:
+        label = issue['names'].get(field, None)
+        if not label:
+            label = field
+        value = issue['fields'].get(field, None)
+        if value:
+            if isinstance(value, dict):
+                value = value['value']
+            if isinstance(value, basestring):
+                description += "'''%s''':\r\n" % label
+                description += value + "\r\n"
+    yt_issue['description'] = description + (issue['fields'].get('description', None) or '')
     for field, value in issue['fields'].items():
+        if field == 'description':
+            continue
+        if field in description_fields:
+            continue
         if value is None:
             continue
         if fields_mapping and field.lower() in fields_mapping:
@@ -224,6 +245,7 @@ def ignore_youtrack_exceptions(f):
             return f(*args, **kwargs)
         except YouTrackException, e:
             print e
+
     return wrapper
 
 
@@ -443,13 +465,13 @@ def process_worklog(source, target, issue):
                 work_item.description = w['comment']
             work_item.duration = int(int(w['timeSpentSeconds']) / 60)
             work_items.append(work_item)
-            #target.createWorkItem(issue['key'], work_item)
+            # target.createWorkItem(issue['key'], work_item)
         target.importWorkItems(issue['key'], work_items)
 
 
 def jira2youtrack(source_url, source_login, source_password,
                   target_url, target_login, target_password,
-                  projects, flags, field_mappings, value_mappings):
+                  projects, flags, field_mappings, value_mappings, description_fields):
     print 'source_url   : ' + source_url
     print 'source_login : ' + source_login
     print 'target_url   : ' + target_url
@@ -488,7 +510,7 @@ def jira2youtrack(source_url, source_login, source_password,
                     for issue in jira_issues:
                         issues2import.append(
                             to_yt_issue(target, issue, project_id,
-                                        field_mappings, value_mappings))
+                                        field_mappings, value_mappings, description_fields))
                     if not issues2import:
                         continue
                     target.importIssues(
@@ -525,6 +547,7 @@ class JiraAttachment(object):
     def getContent(self):
         return urllib2.urlopen(
             urllib2.Request(self._url, headers=self._source._headers))
+
 
 if __name__ == '__main__':
     main()
