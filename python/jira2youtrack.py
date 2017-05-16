@@ -9,6 +9,9 @@
 import calendar
 import functools
 import sys
+
+reload(sys)
+sys.setdefaultencoding('utf8')
 import os
 import re
 import getopt
