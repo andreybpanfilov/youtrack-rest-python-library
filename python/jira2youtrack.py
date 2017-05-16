@@ -58,6 +58,7 @@ Arguments:
 
 Options:
     -h,  Show this help and exit
+    -b,  Batch size
     -i,  Import issues
     -a,  Import attachments
     -r,  Replace old attachments with new ones (remove and re-import)
@@ -88,8 +89,9 @@ def main():
     field_mappings = dict()
     value_mappings = dict()
     description_fields = []
+    batch_size = 10
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'harltiwm:M:T:')
+        opts, args = getopt.getopt(sys.argv[1:], 'harltiwb:m:M:T:')
         for opt, val in opts:
             if opt == '-h':
                 usage()
@@ -130,6 +132,9 @@ def main():
                         value_mappings[field_name][jira_value.lower()] = yt_value
             elif opt == '-T':
                 description_fields = re.split(",\s*", val)
+            elif opt == '-b':
+                batch_size = int(val)
+
     except getopt.GetoptError, e:
         print e
         usage()
@@ -165,7 +170,7 @@ def main():
 
     jira2youtrack(j_url, j_login, j_password,
                   y_url, y_login, y_password, projects,
-                  flags, field_mappings, value_mappings, description_fields)
+                  flags, batch_size, field_mappings, value_mappings, description_fields)
 
 
 def to_yt_issue(target, issue, project_id,
@@ -474,7 +479,7 @@ def process_worklog(source, target, issue):
 
 def jira2youtrack(source_url, source_login, source_password,
                   target_url, target_login, target_password,
-                  projects, flags, field_mappings, value_mappings, description_fields):
+                  projects, flags, batch_size, field_mappings, value_mappings, description_fields):
     print 'source_url   : ' + source_url
     print 'source_login : ' + source_login
     print 'target_url   : ' + target_url
@@ -484,7 +489,6 @@ def jira2youtrack(source_url, source_login, source_password,
     target = Connection(target_url, target_login, target_password)
 
     issue_links = []
-    chunk_size = 10
 
     for project in projects:
         project_id, start, end = project
@@ -494,7 +498,7 @@ def jira2youtrack(source_url, source_login, source_password,
             pass
 
         while True:
-            _end = start + chunk_size - 1
+            _end = start + batch_size - 1
             if end and _end > end:
                 _end = end
             if start > _end:
@@ -502,7 +506,7 @@ def jira2youtrack(source_url, source_login, source_password,
             print 'Processing issues: %s [%d .. %d]' % (project_id, start, _end)
             try:
                 jira_issues = source.get_issues(project_id, start, _end)
-                start += chunk_size
+                start += batch_size
                 if not (jira_issues or end):
                     break
                 # Filter out moved issues
