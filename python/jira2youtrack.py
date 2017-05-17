@@ -253,7 +253,7 @@ def process_links(target, issue, yt_links):
         try:
             target.createIssueLinkTypeDetailed(
                 type_name, outward, inward, inward != outward)
-        except YouTrackException:
+        except YouTrackException, e:
             pass
 
         yt_link = Link()
@@ -433,7 +433,8 @@ def jira2youtrack(source_url, source_login, source_password,
                     process_worklog(source, target, issue)
 
     if flags & FI_LINKS:
-        target.importLinks(issue_links)
+        for link in issue_links:
+            target.importLinks([link])
 
 
 class JiraAttachment(object):

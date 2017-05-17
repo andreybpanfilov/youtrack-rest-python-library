@@ -350,6 +350,8 @@ class Connection(object):
                                         ' ' for attr in l if attr not in ['typeInward', 'typeOutward']) + '/>\n'
         xml += '</list>'
         #TODO: convert response xml into python objects
+        if isinstance(xml, unicode):
+            xml = xml.encode('utf-8')
         res = self._reqXml('PUT', '/import/links', xml, 400)
         return res.toxml() if hasattr(res, "toxml") else res
 
