@@ -513,14 +513,16 @@ class ProjectHelper(object):
         return self.target.createProjectCustomFieldDetailed(self.id, field_name, empty_field_text, params)
 
     def describe_field(self, field):
-        if field.lower() == 'description':
+        field_lc = field.lower()
+        is_mapped = field_lc in self.fields_mapping
+        if field_lc == 'description':
             return None, None
-        if field.lower() in self.description_fields:
+        if field_lc in self.description_fields and not is_mapped:
             return None, None
-        if field.lower() in self.skip_fields:
+        if field_lc in self.skip_fields:
             return None, None
-        if self.fields_mapping and field.lower() in self.fields_mapping:
-            field_name, field_type = self.fields_mapping[field.lower()]
+        if is_mapped:
+            field_name, field_type = self.fields_mapping[field_lc]
         else:
             field_name = get_yt_field_name(field)
             field_type = get_yt_field_type(field_name)
