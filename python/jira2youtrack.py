@@ -592,6 +592,8 @@ class ProjectHelper(object):
                     yt_issue[field_name] = values
                 else:
                     yt_issue[field_name] = values[0]
+        if 'reporterName' not in yt_issue:
+            yt_issue['reporterName'] = 'root'
         return yt_issue
 
     def create_fields(self, fields):
